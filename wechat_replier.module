@@ -1,0 +1,311 @@
+<?php
+
+/*
+事件(event)
+-ToUserName	 接收方微信号
+-FromUserName	 发送方微信号，若为普通用户，则是一个OpenID
+-CreateTime	 消息创建时间
+-MsgType	 消息类型，event
+-Event	 事件类型，subscribe(订阅)、unsubscribe(取消订阅)、CLICK(自定义菜单点击事件)
+-EventKey	 事件KEY值，与自定义菜单接口中KEY值对应
+
+文本消息(text)
+-ToUserName	 接收方帐号（收到的OpenID）
+-FromUserName	 开发者微信号
+-CreateTime	 消息创建时间
+-MsgType	 text
+-Content  回复的消息内容,长度不超过2048字节
+
+音乐消息(music)
+-ToUserName	 接收方帐号（收到的OpenID）
+-FromUserName	 开发者微信号
+-CreateTime	 消息创建时间
+-MsgType	 music
+-MusicUrl	 音乐链接
+-HQMusicUrl	 高质量音乐链接，WIFI环境优先使用该链接播放音乐
+
+图文消息(news)
+-ToUserName	 接收方帐号（收到的OpenID）
+-FromUserName	 开发者微信号
+-CreateTime	 消息创建时间
+-MsgType	 news
+-ArticleCount	 图文消息个数，限制为10条以内
+-Articles	 多条图文消息信息，默认第一个item为大图
+-Title	 图文消息标题
+-Description	 图文消息描述
+-PicUrl	 图片链接，支持JPG、PNG格式，较好的效果为大图640*320，小图80*80。
+-Url	 点击图文消息跳转链接
+*/
+
+define("TEXT_TEMPLATE", "<xml><ToUserName><![CDATA[%s]]></ToUserName><FromUserName><![CDATA[%s]]></FromUserName><CreateTime>%s</CreateTime><MsgType><![CDATA[%s]]></MsgType><Content><![CDATA[%s]]></Content><FuncFlag>%s</FuncFlag></xml>");
+define("NEWS_TEMPLATE", "<xml><ToUserName><![CDATA[%s]]></ToUserName><FromUserName><![CDATA[%s]]></FromUserName><CreateTime>%s</CreateTime><MsgType><![CDATA[%s]]></MsgType><ArticleCount>%s</ArticleCount>%s<FuncFlag>1</FuncFlag></xml>");
+define("MUSIC_TEMPLATE", "<xml><ToUserName><![CDATA[%s]]></ToUserName><FromUserName><![CDATA[%s]]></FromUserName><CreateTime>%s</CreateTime><MsgType><![CDATA[%s]]></MsgType><Music><Title><![CDATA[%s]]></Title><Description><![CDATA[%s]]></Description><MusicUrl><![CDATA[%s]]></MusicUrl><HQMusicUrl><![CDATA[%s]]></HQMusicUrl></Music><FuncFlag>%s</FuncFlag></xml>");
+
+
+function weixin_replier_help($path, $arg)
+{
+	$output = '';
+	switch ($path) {
+		case 'admin/config/services/weixin':
+			$output = '<p>'.t('In this page, you could set various settings regarding weixin public platform.').'</p>';
+			break;
+		default:
+			return;
+	}
+	return $output;
+}
+
+function weixin_replier_menu()
+{
+	$items = array();
+	$items['admin/config/services/weixin'] = array(
+		'title' => 'Configure Weixin Platform',
+		'description' => 'weixin configuration and customized rules for response.',
+		'access arguments' => array('access administration pages'),
+		'page callback' => 'drupal_get_form',
+		'page arguments' => array('weixin_replier_admin_form'),
+	);
+	$items['weixin/callback'] = array(
+		'title' => 'Weixin Callback',
+		'description' => 'Weixin Callback Interface',
+		'page callback' => 'weixin_replier_callback',
+		'access callback' => 'weixin_replier_callback_access',
+		'type' => MENU_CALLBACK,
+	);
+	return $items;
+}
+
+function weixin_replier_callback()
+{
+}
+
+function weixin_replier_callback_access()
+{
+	global $base_url;
+	$time = time();
+	$wxid = 'TONY_LABS';
+	
+	$token = variable_get('weixintoken', '');
+	
+	$wechatmsgtype = variable_get('wechatmsgtype', '');
+	
+	$postStr = file_get_contents("php://input");
+	
+	$postStr = (isset($GLOBALS["HTTP_RAW_POST_DATA"]))?$GLOBALS["HTTP_RAW_POST_DATA"]:'';
+	
+	$request = new WechatRequest($token, $_GET, $wxid, $postStr);
+
+	if($_SERVER['REQUEST_METHOD']=='GET') //@Only used for Token verify
+	{
+		drupal_add_http_header('Content-Type', 'text/plain; charset=utf-8');
+		echo $_GET['echostr'];
+		exit;
+	}
+	
+	$objPost = simplexml_load_string($postStr, 'SimpleXMLElement', LIBXML_NOCDATA);
+
+	$fromUsername = (string)$objPost->FromUserName;
+	$toUsername = (string)$objPost->ToUserName;
+	$msgType = strtolower(trim((string)$objPost->MsgType));
+	$content = (string)$objPost->Content;
+	
+	if($msgType == 'event')
+	{
+		$keyword = strtolower(trim($objPost->Event));
+	}
+	elseif($msgType == 'text')
+	{
+		$keyword = strtolower(trim($content));
+	}
+	elseif($msgType == 'voice')
+	{
+		$keyword = '[voice]';
+	}
+
+	switch ($wechatmsgtype)
+	{
+		case 'news':
+			$num_rows = 4;
+			$textTpl = NEWS_TEMPLATE;
+		break;
+		
+		case 'music':
+			
+			$num_rows = 1;
+			$textTpl = MUSIC_TEMPLATE;
+		break;
+		
+		case 'text':
+		default:
+			$num_rows = 1;
+			$textTpl = TEXT_TEMPLATE;
+		break;
+	}
+	
+	$output = '';
+	$content = '';
+			
+	$query = db_select('node', 'n');
+	$query->join('field_data_body', 'body', 'n.nid = body.entity_id');
+	$query->rightJoin('field_data_field_feature_image', 'feature_image', 'feature_image.entity_id=n.nid');
+	$query->rightJoin('file_managed', 'file', 'file.fid=feature_image.field_feature_image_fid');
+	$query->fields('n',array('title','created', 'nid'))
+		->fields('body',array('body_value'))
+		->fields('file',array('uri'))
+		->condition('type', array('tutorials','wechat_message'))
+		->condition('title', '%'.$keyword.'%', 'like')
+		->orderBy('created', 'DESC')
+		->range(0, $num_rows);
+		
+	$count = $query->countQuery()->execute()->fetchField();
+	
+	if ($count)
+	{
+		$result = $query->execute();
+		
+		$content = '<Articles>';
+		while($rs = $result->fetchAssoc())
+		{
+			//$content = strip_tags($rs['body_value']);
+			
+			if ($rs['uri']) $picurl = file_create_url($rs['uri']);
+			
+			$nodeurl = $base_url . '/node/'.$rs['nid'];
+			
+			$content .= sprintf("<item><Title><![CDATA[%s]]></Title><Description><![CDATA[%s]]></Description><PicUrl><![CDATA[%s]]></PicUrl><Url><![CDATA[%s]]></Url></item>", $rs['title'], strip_tags($rs['body_value']), $picurl, $nodeurl);
+			
+		}
+		$content .= '</Articles>';
+	}
+	else
+	{
+		$wechatmsgtype = 'text';
+		$textTpl = TEXT_TEMPLATE;
+		$content = '对不起，没找到。';
+	}
+	
+	switch ($wechatmsgtype)
+	{
+		case 'news':
+			$output = sprintf($textTpl, $fromUsername, $wxid, $time, 'news', $count, $content, 1);
+		break;
+		
+		case 'music':
+			//$output = sprintf($textTpl, $fromUsername, $wxid, $time, 'music', $this->music['title'], $this->music['description'], $this->music['url'], $this->music['hqurl'], 1);
+		break;
+		default:
+			$output = sprintf($textTpl, $fromUsername, $wxid, $time, 'text', $content, 1);
+		break;
+	}
+	
+	watchdog('weixin',
+		'Output is @output',
+		array('@output' => $output),
+		WATCHDOG_INFO
+	);
+	
+	//drupal_add_http_header('Content-Type', 'application/xml; charset=utf-8');
+	
+	if(!empty($output))
+	{
+		echo $output;
+	}
+	else
+	{
+		echo '';
+	}
+	exit;
+}
+
+function weixin_replier_admin_form($form, $form_state)
+{
+	global $base_url;
+	
+	$form=array(
+		'#submit' => array('weixin_replier_admin_form_submit'),
+	);
+	
+	$form['weixincallback'] = array(
+		'#type' => 'textfield',
+		'#title' => t('Callback URL'),
+		'#description' => t('The default site weixin callback URL.'),
+		'#default_value' => $base_url . '/weixin/callback',
+		'#disabled' => TRUE,
+		'#required' => TRUE,
+	);
+	$form['weixintoken'] = array(
+		'#type' => 'textfield',
+		'#title' => t('Token'),
+		'#description' => t('The token set in weixin public platform.'),
+		'#default_value' => variable_get('weixintoken', ''),
+		'#required' => TRUE,
+	);
+	$form['wechatcontenttype'] = array(
+		'#type' => 'select',
+		'#options' => array( 'text'=>t('text'), 'event'=>t('event'), 'music'=>t('music'), 'news'=>t('news')),
+		'#title' => t('Content Type'),
+		'#description' => t('Select the message type sent to Wechat user.'),
+		'#default_value' => variable_get('wechatcontenttype', ''),
+		'#required' => TRUE,
+	);
+	
+	$form['wechatmsgtype'] = array(
+		'#type' => 'select',
+		'#options' => array( 'text'=>t('text'), 'event'=>t('event'), 'music'=>t('music'), 'news'=>t('news')),
+		'#title' => t('Message Type'),
+		'#description' => t('Select the message type sent to Wechat user.'),
+		'#default_value' => variable_get('wechatmsgtype', ''),
+		'#required' => TRUE,
+	);
+	return system_settings_form($form);
+}
+
+function weixin_replier_admin_form_submit($form, $form_state)
+{
+	variable_set('weixintoken', $form_state['values']['weixintoken']);
+}
+
+/**
+ *  * Implementation of hook_uninstall().
+ *   */
+function weixin_replier_uninstall()
+{
+	$settings=array(
+		'weixintoken',
+		'weixincallback'
+	);
+	foreach($settings as $s) {
+		variable_del($s);
+	}
+}
+
+// Constructor: $wee = new WechatRequest($token, $_GET, $wxid, $post);
+class WechatRequest
+{
+	public $wxid = NULL;
+	public $msgid = NULL;
+	public $username = NULL;
+	public $msgtype = NULL;
+	public $content = NULL;
+	private $rawinput = NULL;
+	
+	public function __construct($token, $args, $wxid, $post=NULL)
+	{
+		if($this->checkSignature($token, $args))
+		{
+			
+		}
+	}
+	private function checkSignature($token, $get)
+	{
+		$signature = $get['signature'];
+		$timestamp = $get["timestamp"];
+		$nonce = $get["nonce"];
+		$tmpArr = array($token, $timestamp, $nonce);
+		asort($tmpArr, SORT_STRING);
+		$tmpStr = implode( $tmpArr );
+		$tmpStr = sha1( $tmpStr );
+		if( $tmpStr == $signature ) return TRUE;
+		else return FALSE;
+	}
+}

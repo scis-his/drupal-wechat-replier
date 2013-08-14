@@ -1,0 +1,16 @@
+name = Wechat Replier
+description = A kind of wechat Module to auto reply user message by site content.
+core = 7.x
+package = Core
+
+files[] = wechat_replier.module
+files[] = wechat_replier.install
+
+configure = admin/config/services/wechat
+
+; Information added by drupal.org packaging script on 2013-08-06
+
+version = "7.x-1.0"
+core = "7.x"
+project = "wechat_replier"
+datestamp = "1355853150"
