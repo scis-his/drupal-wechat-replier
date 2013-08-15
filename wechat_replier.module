@@ -148,17 +148,24 @@ function wechat_replier_callback_access()
 			
 	$query = db_select('node', 'n');
 	$query->join('field_data_body', 'body', 'n.nid = body.entity_id');
-	$query->rightJoin('field_data_field_feature_image', 'feature_image', 'feature_image.entity_id=n.nid');
-	$query->rightJoin('file_managed', 'file', 'file.fid=feature_image.field_feature_image_fid');
-	$query->fields('n',array('title','created', 'nid'))
-		->fields('body',array('body_value'))
-		->fields('file',array('uri'))
-		->condition('type', array('tutorials','wechat_message'))
-		->condition('title', '%'.$keyword.'%', 'like')
-		->orderBy('created', 'DESC')
-		->range(0, $num_rows);
+	$query->leftJoin('page_title', 'page_title', 'page_title.id=n.nid');
+	$query->leftJoin('field_data_field_feature_image', 'feature_image', 'feature_image.entity_id=n.nid');
+	$query->leftJoin('file_managed', 'file', 'file.fid=feature_image.field_feature_image_fid');
+	$query->fields('n',array('title','created', 'nid'));
+	$query->fields('body',array('body_value'));
+	$query->fields('file',array('uri'));
+	$query->condition('n.type', array('tutorials'));
+	$query->condition(db_or()->condition('title', '%'.$keyword.'%', 'like')->condition('page_title.page_title', '%'.$keyword.'%', 'like'));
+	$query->orderBy('n.created', 'DESC');
+	$query->range(0, $num_rows);
 		
 	$count = $query->countQuery()->execute()->fetchField();
+	
+	watchdog('wechat_replier',
+		'Query is @query',
+		array('@query' => $query),
+		WATCHDOG_INFO
+	);
 	
 	if ($count)
 	{
@@ -169,11 +176,13 @@ function wechat_replier_callback_access()
 		{
 			//$content = strip_tags($rs['body_value']);
 			
+			$page_title = (empty($rs['page_title'])) ? $rs['title'] : $rs['page_title'];
+			
 			if ($rs['uri']) $picurl = file_create_url($rs['uri']);
 			
 			$nodeurl = $base_url . '/node/'.$rs['nid'];
 			
-			$content .= sprintf("<item><Title><![CDATA[%s]]></Title><Description><![CDATA[%s]]></Description><PicUrl><![CDATA[%s]]></PicUrl><Url><![CDATA[%s]]></Url></item>", truncate($rs['title'], 40), truncate($rs['body_value'], 100), $picurl, $nodeurl);
+			$content .= sprintf("<item><Title><![CDATA[%s]]></Title><Description><![CDATA[%s]]></Description><PicUrl><![CDATA[%s]]></PicUrl><Url><![CDATA[%s]]></Url></item>", truncate($page_title, 40), truncate($rs['body_value'], 100), $picurl, $nodeurl);
 			
 		}
 		$content .= '</Articles>';
