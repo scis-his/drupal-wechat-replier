@@ -6,7 +6,7 @@ package = Core
 files[] = wechat_replier.module
 files[] = wechat_replier.install
 
-configure = admin/config/services/wechat
+configure = admin/config/services/wechat_replier
 
 ; Information added by drupal.org packaging script on 2013-08-06
 
